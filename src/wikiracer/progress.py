@@ -9,6 +9,7 @@ from wikiracer.urls import display_title_from_path
 @dataclass
 class ParticipantProgress:
     address: str
+    name: str | None = None
     path: list[str] = field(default_factory=list)
 
     @property
@@ -18,6 +19,8 @@ class ParticipantProgress:
     def as_dict(self) -> dict[str, Any]:
         return {
             "address": self.address,
+            "name": self.name,
+            "displayName": self.name or self.address,
             "currentTitle": self.current_title,
             "path": self.path,
         }
@@ -50,6 +53,20 @@ def record_page(address: str, page: tuple[str, str]) -> dict[str, Any]:
         )
         if progress.current_title != title:
             progress.path.append(title)
+        state = snapshot()
+
+    publish(state)
+    return state
+
+
+def set_participant_name(address: str, name: str) -> dict[str, Any]:
+    """Set a display name for a participant and notify subscribers."""
+    with _lock:
+        progress = _participants.get(address)
+        if progress is None:
+            return snapshot()
+        cleaned_name = name.strip()
+        progress.name = cleaned_name or None
         state = snapshot()
 
     publish(state)
