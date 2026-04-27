@@ -1,13 +1,17 @@
 [project]
 name = "wikiracer"
 version = "0.1.0"
-description = "Add your description here"
+description = "Wiki racing game host"
 readme = "README.md"
 authors = [
     { name = "Felix Jung", email = "felix.jung@tu-dresden.de" }
 ]
-requires-python = ">=3.14"
-dependencies = []
+requires-python = ">=3.12"
+dependencies = [
+    "beautifulsoup4",
+    "mitmproxy",
+    "typer",
+]
 
 [project.scripts]
 wikiracer = "wikiracer:main"
