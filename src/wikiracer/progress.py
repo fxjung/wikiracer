@@ -11,6 +11,7 @@ class ParticipantProgress:
     address: str
     name: str | None = None
     path: list[str] = field(default_factory=list)
+    current_node_id: str | None = None
 
     @property
     def current_title(self) -> str | None:
@@ -29,6 +30,9 @@ class ParticipantProgress:
 
 _lock = threading.RLock()
 _participants: dict[str, ParticipantProgress] = {}
+_graph_nodes: list[dict[str, Any]] = []
+_graph_edges: list[dict[str, Any]] = []
+_next_node_id = 1
 _subscribers: set[tuple[asyncio.AbstractEventLoop, asyncio.Queue[dict[str, Any]]]] = set()
 
 
@@ -41,11 +45,21 @@ def snapshot() -> dict[str, Any]:
                 key=lambda item: item.address,
             )
         ]
-    return {"participants": participants}
+        graph = {
+            "nodes": list(_graph_nodes),
+            "edges": list(_graph_edges),
+            "currentNodeIds": {
+                progress.address: progress.current_node_id
+                for progress in _participants.values()
+                if progress.current_node_id is not None
+            },
+        }
+    return {"participants": participants, "graph": graph}
 
 
 def record_page(address: str, page: tuple[str, str]) -> dict[str, Any]:
     """Record a fetched page for one participant and notify subscribers."""
+    global _next_node_id
     title = display_title_from_path(page[1])
     with _lock:
         progress = _participants.setdefault(
@@ -54,6 +68,27 @@ def record_page(address: str, page: tuple[str, str]) -> dict[str, Any]:
         )
         if progress.current_title != title:
             progress.path.append(title)
+
+            node_id = f"n{_next_node_id}"
+            _next_node_id += 1
+            _graph_nodes.append(
+                {
+                    "id": node_id,
+                    "title": title,
+                    "address": address,
+                    "participant": progress.name or address,
+                }
+            )
+            if progress.current_node_id is not None:
+                _graph_edges.append(
+                    {
+                        "id": f"e{len(_graph_edges) + 1}",
+                        "source": progress.current_node_id,
+                        "target": node_id,
+                        "address": address,
+                    }
+                )
+            progress.current_node_id = node_id
         state = snapshot()
 
     publish(state)
@@ -75,10 +110,11 @@ def set_participant_name(address: str, name: str) -> dict[str, Any]:
 
 
 def reset_round() -> dict[str, Any]:
-    """Clear participant paths while keeping known participants and names."""
+    """Clear participant paths while keeping known participants, names, and graph."""
     with _lock:
         for progress in _participants.values():
             progress.path.clear()
+            progress.current_node_id = None
         state = snapshot()
 
     publish(state)
@@ -86,8 +122,19 @@ def reset_round() -> dict[str, Any]:
 
 
 def reset_game() -> dict[str, Any]:
-    """Clear participant paths while keeping known participants and names."""
-    return reset_round()
+    """Clear participant paths and graph while keeping known participants and names."""
+    global _next_node_id
+    with _lock:
+        for progress in _participants.values():
+            progress.path.clear()
+            progress.current_node_id = None
+        _graph_nodes.clear()
+        _graph_edges.clear()
+        _next_node_id = 1
+        state = snapshot()
+
+    publish(state)
+    return state
 
 
 def subscribe() -> asyncio.Queue[dict[str, Any]]:

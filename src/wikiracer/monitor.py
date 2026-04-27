@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 import uvicorn
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
 from wikiracer.progress import (
@@ -20,6 +21,9 @@ from wikiracer.storage import clear_visited_pages
 
 MONITOR_HOST = "127.0.0.1"
 MONITOR_PORT = 9999
+CYTOSCAPE_PATH = Path(__file__).with_name("cytoscape.min.js")
+CYTOSCAPE_DAGRE_DEPENDENCY_PATH = Path(__file__).with_name("dagre.min.js")
+CYTOSCAPE_DAGRE_PATH = Path(__file__).with_name("cytoscape-dagre.min.js")
 
 app = FastAPI(title="Wikiracer Monitor")
 _server_started = False
@@ -32,6 +36,9 @@ AUDIENCE_HTML = """<!doctype html>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Wikiracer</title>
+  <script src="/assets/cytoscape.min.js"></script>
+  <script src="/assets/dagre.min.js"></script>
+  <script src="/assets/cytoscape-dagre.min.js"></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -63,17 +70,17 @@ AUDIENCE_HTML = """<!doctype html>
     }
     .grid {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
       gap: 16px;
     }
     .participant {
-      min-height: 170px;
       padding: 18px;
       border: 1px solid #d5dce6;
       border-left: 7px solid var(--accent);
       background: #ffffff;
       box-shadow: 0 12px 28px rgba(27, 37, 51, .08);
       box-sizing: border-box;
+      min-width: 0;
     }
     .participant:nth-child(6n+1) { --accent: #2f80ed; }
     .participant:nth-child(6n+2) { --accent: #27ae60; }
@@ -121,6 +128,7 @@ AUDIENCE_HTML = """<!doctype html>
       color: #4a5563;
       line-height: 1.45;
       overflow-wrap: anywhere;
+      margin-bottom: 14px;
     }
     .separator {
       color: var(--accent);
@@ -133,6 +141,42 @@ AUDIENCE_HTML = """<!doctype html>
       background: white;
       border: 1px solid #d9dde3;
     }
+    .participant-graph {
+      height: clamp(180px, 26vh, 280px);
+      border: 1px solid #d5dce6;
+      background: #f8fafc;
+      position: relative;
+      overflow: hidden;
+    }
+    .graph {
+      position: absolute;
+      inset: 0;
+    }
+    .graph-empty {
+      position: absolute;
+      inset: 0;
+      display: grid;
+      place-items: center;
+      color: #6a7280;
+      pointer-events: none;
+    }
+    .graph-panel[hidden] {
+      display: none;
+    }
+    .graph-empty[hidden] {
+      display: none;
+    }
+    @media (max-width: 760px) {
+      body {
+        padding: 16px;
+      }
+      .grid {
+        grid-template-columns: 1fr;
+      }
+      .participant-graph {
+        height: 210px;
+      }
+    }
     @media (prefers-color-scheme: dark) {
       :root {
         background: #15191f;
@@ -142,6 +186,10 @@ AUDIENCE_HTML = """<!doctype html>
         background: #20262e;
         border-color: #36404d;
         box-shadow: none;
+      }
+      .participant-graph {
+        background: #171b21;
+        border-color: #36404d;
       }
       .path, .status {
         color: #b8c0cc;
@@ -164,6 +212,7 @@ AUDIENCE_HTML = """<!doctype html>
   <script>
     const statusEl = document.querySelector("#status");
     const participantsEl = document.querySelector("#participants");
+    const graphs = new Map();
     let lastRenderAt = 0;
 
     function render(state) {
@@ -187,12 +236,170 @@ AUDIENCE_HTML = """<!doctype html>
             <p class="current-label">Current page</p>
             <p class="current">${escapeHtml(participant.currentTitle || "")}</p>
             <div class="path">${renderPath(participant.path || [])}</div>
+            <div class="participant-graph">
+              <div class="graph" data-address="${escapeHtml(participant.address)}"></div>
+              <div class="graph-empty">No graph yet.</div>
+            </div>
           </section>
         `).join("")}
       `;
+      renderGraphs(participants, state.graph || { nodes: [], edges: [], currentNodeIds: {} });
+    }
+
+    function renderGraphs(participants, graphState) {
+      const activeAddresses = new Set(participants.map((participant) => participant.address));
+      graphs.forEach((entry, address) => {
+        if (!activeAddresses.has(address)) {
+          entry.cy.destroy();
+          graphs.delete(address);
+        }
+      });
+
+      participants.forEach((participant) => {
+        renderParticipantGraph(participant.address, graphState);
+      });
+    }
+
+    function renderParticipantGraph(address, graphState) {
+      const container = participantsEl.querySelector(`.graph[data-address="${cssEscape(address)}"]`);
+      if (!container) {
+        return;
+      }
+      const panel = container.closest(".participant-graph");
+      const emptyEl = panel.querySelector(".graph-empty");
+      const allNodes = graphState.nodes || [];
+      const allEdges = graphState.edges || [];
+      const currentNodeId = (graphState.currentNodeIds || {})[address] || null;
+      const nodes = allNodes.filter((node) => node.address === address);
+      const nodeIds = new Set(nodes.map((node) => node.id));
+      const edges = allEdges.filter(
+        (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target),
+      );
+      const signature = JSON.stringify({
+        nodes: nodes.map((node) => [node.id, node.title]),
+        edges: edges.map((edge) => [edge.id, edge.source, edge.target]),
+        current: currentNodeId,
+      });
+      const existing = graphs.get(address);
+      if (existing?.signature === signature && existing.container === container) {
+        existing.cy.resize();
+        existing.cy.fit(undefined, 18);
+        return;
+      }
+      emptyEl.hidden = nodes.length > 0;
+      if (!window.cytoscape || nodes.length === 0) {
+        existing?.cy.destroy();
+        graphs.delete(address);
+        return;
+      }
+
+      const elements = [
+        ...nodes.map((node) => ({
+          classes: node.id === currentNodeId ? "current" : "",
+          data: {
+            id: node.id,
+            label: node.title,
+            participant: node.participant,
+          },
+        })),
+        ...edges.map((edge) => ({
+          data: {
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+          },
+        })),
+      ];
+
+      let cy = existing?.cy;
+      if (!cy || existing.container !== container) {
+        existing?.cy.destroy();
+        cy = cytoscape({
+          container,
+          elements,
+          userZoomingEnabled: false,
+          userPanningEnabled: false,
+          boxSelectionEnabled: false,
+          autoungrabify: true,
+          wheelSensitivity: 0.2,
+          style: [
+            {
+              selector: "node",
+              style: {
+                "background-color": "#4f7ec8",
+                "border-color": "#d9e2ef",
+                "border-width": 1,
+                "color": "#1f2933",
+                "font-size": 13,
+                "font-weight": 650,
+                "label": "data(label)",
+                "text-background-color": "#ffffff",
+                "text-background-opacity": 0.92,
+                "text-background-padding": 3,
+                "text-margin-y": -9,
+                "text-wrap": "wrap",
+                "text-max-width": 110,
+                "width": 12,
+                "height": 12,
+              },
+            },
+            {
+              selector: "node.current",
+              style: {
+                "background-color": "#27ae60",
+                "border-color": "#0b6b36",
+                "border-width": 3,
+                "width": 20,
+                "height": 20,
+                "z-index": 20,
+              },
+            },
+            {
+              selector: "edge",
+              style: {
+                "curve-style": "bezier",
+                "line-color": "#9aa7b7",
+                "target-arrow-color": "#9aa7b7",
+                "target-arrow-shape": "triangle",
+                "arrow-scale": 0.75,
+                "width": 1.4,
+              },
+            },
+          ],
+        });
+      } else {
+        cy.elements().remove();
+        cy.add(elements);
+      }
+
+      cy.layout({
+        name: window.cytoscapeDagre ? "dagre" : "breadthfirst",
+        rankDir: "LR",
+        nodeSep: 28,
+        rankSep: 56,
+        edgeSep: 12,
+        fit: false,
+        padding: 16,
+        directed: true,
+        spacingFactor: 0.9,
+        animate: false,
+      }).run();
+      cy.resize();
+      cy.fit(undefined, 18);
+      graphs.set(address, { cy, signature, container });
+    }
+
+    function cssEscape(value) {
+      if (window.CSS?.escape) {
+        return window.CSS.escape(value);
+      }
+      return String(value).replace(/["\\\\]/g, "\\\\$&");
     }
 
     function renderPath(path) {
+      if (path.length === 0) {
+        return "";
+      }
       return path.map((title) => escapeHtml(title)).join('<span class="separator">&gt;</span>');
     }
 
@@ -565,6 +772,21 @@ def admin() -> str:
 @app.get("/api/progress")
 def progress() -> dict[str, object]:
     return snapshot()
+
+
+@app.get("/assets/cytoscape.min.js")
+def cytoscape_js() -> FileResponse:
+    return FileResponse(CYTOSCAPE_PATH, media_type="text/javascript")
+
+
+@app.get("/assets/dagre.min.js")
+def dagre_js() -> FileResponse:
+    return FileResponse(CYTOSCAPE_DAGRE_DEPENDENCY_PATH, media_type="text/javascript")
+
+
+@app.get("/assets/cytoscape-dagre.min.js")
+def cytoscape_dagre_js() -> FileResponse:
+    return FileResponse(CYTOSCAPE_DAGRE_PATH, media_type="text/javascript")
 
 
 @app.post("/api/participant-name")
