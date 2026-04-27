@@ -22,8 +22,9 @@ from wikiracer.storage import clear_visited_pages
 MONITOR_HOST = "127.0.0.1"
 MONITOR_PORT = 9999
 CYTOSCAPE_PATH = Path(__file__).with_name("cytoscape.min.js")
-CYTOSCAPE_DAGRE_DEPENDENCY_PATH = Path(__file__).with_name("dagre.min.js")
-CYTOSCAPE_DAGRE_PATH = Path(__file__).with_name("cytoscape-dagre.min.js")
+LAYOUT_BASE_PATH = Path(__file__).with_name("layout-base.min.js")
+COSE_BASE_PATH = Path(__file__).with_name("cose-base.min.js")
+CYTOSCAPE_FCOSE_PATH = Path(__file__).with_name("cytoscape-fcose.min.js")
 
 app = FastAPI(title="Wikiracer Monitor")
 _server_started = False
@@ -37,8 +38,9 @@ AUDIENCE_HTML = """<!doctype html>
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Wikiracer</title>
   <script src="/assets/cytoscape.min.js"></script>
-  <script src="/assets/dagre.min.js"></script>
-  <script src="/assets/cytoscape-dagre.min.js"></script>
+  <script src="/assets/layout-base.min.js"></script>
+  <script src="/assets/cose-base.min.js"></script>
+  <script src="/assets/cytoscape-fcose.min.js"></script>
   <style>
     :root {
       color-scheme: light dark;
@@ -72,6 +74,7 @@ AUDIENCE_HTML = """<!doctype html>
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(340px, 1fr));
       gap: 16px;
+      margin-bottom: 18px;
     }
     .participant {
       padding: 18px;
@@ -141,17 +144,6 @@ AUDIENCE_HTML = """<!doctype html>
       background: white;
       border: 1px solid #d9dde3;
     }
-    .participant-graph {
-      height: clamp(240px, 32vh, 380px);
-      border: 1px solid #d5dce6;
-      background: #f8fafc;
-      position: relative;
-      overflow: hidden;
-    }
-    .graph {
-      position: absolute;
-      inset: 0;
-    }
     .graph-empty {
       position: absolute;
       inset: 0;
@@ -159,6 +151,18 @@ AUDIENCE_HTML = """<!doctype html>
       place-items: center;
       color: #6a7280;
       pointer-events: none;
+    }
+    .graph-panel {
+      height: clamp(360px, 56vh, 760px);
+      border: 1px solid #d5dce6;
+      background: #ffffff;
+      box-shadow: 0 12px 28px rgba(27, 37, 51, .08);
+      position: relative;
+      overflow: hidden;
+    }
+    #graph {
+      position: absolute;
+      inset: 0;
     }
     .graph-panel[hidden] {
       display: none;
@@ -173,8 +177,8 @@ AUDIENCE_HTML = """<!doctype html>
       .grid {
         grid-template-columns: 1fr;
       }
-      .participant-graph {
-        height: 280px;
+      .graph-panel {
+        height: 420px;
       }
     }
     @media (prefers-color-scheme: dark) {
@@ -182,14 +186,10 @@ AUDIENCE_HTML = """<!doctype html>
         background: #15191f;
         color: #eef1f5;
       }
-      .participant, .empty {
+      .participant, .empty, .graph-panel {
         background: #20262e;
         border-color: #36404d;
         box-shadow: none;
-      }
-      .participant-graph {
-        background: #171b21;
-        border-color: #36404d;
       }
       .path, .status {
         color: #b8c0cc;
@@ -209,10 +209,17 @@ AUDIENCE_HTML = """<!doctype html>
     <div id="status" class="status">Connecting...</div>
   </header>
   <main id="participants" class="empty">No participants yet.</main>
+  <section id="graph-panel" class="graph-panel" hidden>
+    <div id="graph"></div>
+    <div id="graph-empty" class="graph-empty">No graph yet.</div>
+  </section>
   <script>
     const statusEl = document.querySelector("#status");
     const participantsEl = document.querySelector("#participants");
-    const graphs = new Map();
+    const graphPanelEl = document.querySelector("#graph-panel");
+    const graphEmptyEl = document.querySelector("#graph-empty");
+    let graph = null;
+    let graphSignature = "";
     let lastRenderAt = 0;
 
     function render(state) {
@@ -228,7 +235,7 @@ AUDIENCE_HTML = """<!doctype html>
       participantsEl.className = "grid";
       participantsEl.innerHTML = `
         ${participants.map((participant) => `
-          <section class="participant">
+          <section class="participant" style="--accent: ${escapeHtml(participant.color || "#2f80ed")}">
             <div class="summary">
               <h2 class="name">${escapeHtml(participant.displayName)}</h2>
               <span class="steps">${escapeHtml(participant.steps || 0)} steps</span>
@@ -236,121 +243,115 @@ AUDIENCE_HTML = """<!doctype html>
             <p class="current-label">Current page</p>
             <p class="current">${escapeHtml(participant.currentTitle || "")}</p>
             <div class="path">${renderPath(participant.path || [])}</div>
-            <div class="participant-graph">
-              <div class="graph" data-address="${escapeHtml(participant.address)}"></div>
-              <div class="graph-empty">No graph yet.</div>
-            </div>
           </section>
         `).join("")}
       `;
-      renderGraphs(participants, state.graph || { nodes: [], edges: [], currentNodeIds: {} });
+      renderGraph(state.graph || { nodes: [], edges: [] });
     }
 
-    function renderGraphs(participants, graphState) {
-      const activeAddresses = new Set(participants.map((participant) => participant.address));
-      graphs.forEach((entry, address) => {
-        if (!activeAddresses.has(address)) {
-          entry.cy.destroy();
-          graphs.delete(address);
-        }
-      });
-
-      participants.forEach((participant) => {
-        renderParticipantGraph(participant.address, graphState);
-      });
-    }
-
-    function renderParticipantGraph(address, graphState) {
-      const container = participantsEl.querySelector(`.graph[data-address="${cssEscape(address)}"]`);
-      if (!container) {
-        return;
-      }
-      const panel = container.closest(".participant-graph");
-      const emptyEl = panel.querySelector(".graph-empty");
-      const allNodes = graphState.nodes || [];
-      const allEdges = graphState.edges || [];
-      const currentNodeId = (graphState.currentNodeIds || {})[address] || null;
-      const nodes = allNodes.filter((node) => node.address === address);
-      const nodeIds = new Set(nodes.map((node) => node.id));
-      const edges = allEdges.filter(
-        (edge) => nodeIds.has(edge.source) && nodeIds.has(edge.target),
-      );
+    function renderGraph(graphState) {
+      const nodes = graphState.nodes || [];
+      const edges = graphState.edges || [];
       const signature = JSON.stringify({
-        nodes: nodes.map((node) => [node.id, node.title]),
-        edges: edges.map((edge) => [edge.id, edge.source, edge.target]),
-        current: currentNodeId,
+        nodes: nodes.map((node) => [
+          node.id,
+          node.title,
+          (node.currentParticipants || []).map((participant) => participant.color).join(","),
+        ]),
+        edges: edges.map((edge) => [
+          edge.id,
+          edge.source,
+          edge.target,
+          edge.color,
+          edge.active,
+        ]),
       });
-      const existing = graphs.get(address);
-      if (existing?.signature === signature && existing.container === container) {
-        existing.cy.resize();
-        existing.cy.fit(undefined, 18);
+      if (signature === graphSignature) {
+        graph?.resize();
         return;
       }
-      emptyEl.hidden = nodes.length > 0;
+      graphSignature = signature;
+      graphPanelEl.hidden = false;
+      graphEmptyEl.hidden = nodes.length > 0;
       if (!window.cytoscape || nodes.length === 0) {
-        existing?.cy.destroy();
-        graphs.delete(address);
+        graph?.elements().remove();
         return;
       }
 
       const elements = [
         ...nodes.map((node) => ({
-          classes: node.id === currentNodeId ? "current" : "",
+          classes: (node.currentParticipants || []).length > 0 ? "current" : "",
+          position: organicPosition(node.id, nodes, edges),
           data: {
             id: node.id,
             label: node.title,
-            participant: node.participant,
+            currentCount: (node.currentParticipants || []).length,
+            ...pieData(node.currentParticipants || []),
           },
         })),
         ...edges.map((edge) => ({
+          classes: edge.active ? "active-edge" : "inactive-edge",
           data: {
             id: edge.id,
             source: edge.source,
             target: edge.target,
+            color: edge.color,
           },
         })),
       ];
 
-      let cy = existing?.cy;
-      if (!cy || existing.container !== container) {
-        existing?.cy.destroy();
-        cy = cytoscape({
-          container,
+      if (!graph) {
+        graph = cytoscape({
+          container: document.querySelector("#graph"),
           elements,
-          userZoomingEnabled: false,
-          userPanningEnabled: false,
           boxSelectionEnabled: false,
-          autoungrabify: true,
-          wheelSensitivity: 0.2,
+          autoungrabify: false,
+          minZoom: 0.15,
+          maxZoom: 4,
+          wheelSensitivity: 5,
+          textureOnViewport: false,
           style: [
             {
               selector: "node",
               style: {
-                "background-color": "#4f7ec8",
-                "border-color": "#d9e2ef",
+                "background-color": "#c8ced7",
+                "border-color": "#8f9aaa",
                 "border-width": 1,
                 "color": "#1f2933",
-                "font-size": 12,
+                "font-size": 13,
                 "font-weight": 650,
                 "label": "data(label)",
                 "text-background-color": "#ffffff",
                 "text-background-opacity": 0.92,
                 "text-background-padding": 3,
-                "text-margin-y": -13,
+                "text-margin-y": -12,
                 "text-wrap": "wrap",
-                "text-max-width": 95,
-                "width": 12,
-                "height": 12,
+                "text-max-width": 125,
+                "width": 14,
+                "height": 14,
               },
             },
             {
               selector: "node.current",
               style: {
-                "background-color": "#27ae60",
-                "border-color": "#0b6b36",
+                "background-color": "#ffffff",
+                "border-color": "#111827",
                 "border-width": 3,
-                "width": 20,
-                "height": 20,
+                "pie-size": "100%",
+                "pie-1-background-color": "data(pieColor1)",
+                "pie-1-background-size": "data(pieSize1)",
+                "pie-2-background-color": "data(pieColor2)",
+                "pie-2-background-size": "data(pieSize2)",
+                "pie-3-background-color": "data(pieColor3)",
+                "pie-3-background-size": "data(pieSize3)",
+                "pie-4-background-color": "data(pieColor4)",
+                "pie-4-background-size": "data(pieSize4)",
+                "pie-5-background-color": "data(pieColor5)",
+                "pie-5-background-size": "data(pieSize5)",
+                "pie-6-background-color": "data(pieColor6)",
+                "pie-6-background-size": "data(pieSize6)",
+                "width": 24,
+                "height": 24,
                 "z-index": 20,
               },
             },
@@ -361,39 +362,238 @@ AUDIENCE_HTML = """<!doctype html>
                 "line-color": "#9aa7b7",
                 "target-arrow-color": "#9aa7b7",
                 "target-arrow-shape": "triangle",
-                "arrow-scale": 0.75,
+                "arrow-scale": 0.8,
+                "width": 1.6,
+                "control-point-step-size": 48,
+              },
+            },
+            {
+              selector: "edge.active-edge",
+              style: {
+                "line-color": "data(color)",
+                "target-arrow-color": "data(color)",
+                "opacity": 0.92,
+                "width": 2.4,
+              },
+            },
+            {
+              selector: "edge.inactive-edge",
+              style: {
+                "line-color": "#a8b0bb",
+                "target-arrow-color": "#a8b0bb",
+                "opacity": 0.38,
                 "width": 1.4,
               },
             },
           ],
         });
       } else {
-        cy.elements().remove();
-        cy.add(elements);
+        graph.elements().remove();
+        graph.add(elements);
       }
 
-      cy.layout({
-        name: window.cytoscapeDagre ? "dagre" : "breadthfirst",
-        rankDir: "LR",
-        nodeSep: 80,
-        rankSep: 64,
-        edgeSep: 28,
-        fit: false,
-        padding: 16,
-        directed: true,
-        spacingFactor: 0.9,
-        animate: false,
+      graph.layout({
+        name: window.cytoscapeFcose ? "fcose" : "cose",
+        quality: "proof",
+        randomize: false,
+        nodeDimensionsIncludeLabels: true,
+        uniformNodeDimensions: false,
+        packComponents: false,
+        tile: false,
+        nodeRepulsion: 74000,
+        idealEdgeLength: 185,
+        edgeElasticity: 0.28,
+        nestingFactor: 0.1,
+        gravity: 0.03,
+        gravityRange: 2.4,
+        nodeSeparation: 190,
+        numIter: 3400,
+        fit: true,
+        padding: 64,
+        animate: true,
+        animationDuration: 650,
+        stop: () => {
+          softenLayoutArtifacts();
+          graph.fit(undefined, 54);
+        },
       }).run();
-      cy.resize();
-      cy.fit(undefined, 18);
-      graphs.set(address, { cy, signature, container });
+      graph.resize();
     }
 
-    function cssEscape(value) {
-      if (window.CSS?.escape) {
-        return window.CSS.escape(value);
+    function softenLayoutArtifacts() {
+      const cyNodes = graph.nodes();
+      if (cyNodes.length < 4 || !organicPosition.layout) {
+        return;
       }
-      return String(value).replace(/["\\\\]/g, "\\\\$&");
+
+      const box = cyNodes.boundingBox({ includeLabels: false });
+      const width = Math.max(box.w, 1);
+      const height = Math.max(box.h, 1);
+      const aspect = width / height;
+      const gridLike = binnedPositionCount(cyNodes, "x") <= Math.ceil(Math.sqrt(cyNodes.length))
+        || binnedPositionCount(cyNodes, "y") <= Math.ceil(Math.sqrt(cyNodes.length));
+      const lineLike = aspect > 4.2 || aspect < 0.24;
+      if (!lineLike && !gridLike) {
+        return;
+      }
+
+      const seedBox = boundingBoxForPositions(organicPosition.layout.positions);
+      const scale = Math.max(width, height) / Math.max(seedBox.w, seedBox.h, 1);
+      const center = { x: box.x1 + width / 2, y: box.y1 + height / 2 };
+      const seedCenter = { x: seedBox.x1 + seedBox.w / 2, y: seedBox.y1 + seedBox.h / 2 };
+      cyNodes.forEach((node) => {
+        const seed = organicPosition.layout.positions.get(node.id());
+        if (!seed) {
+          return;
+        }
+        const current = node.position();
+        const target = {
+          x: center.x + (seed.x - seedCenter.x) * scale,
+          y: center.y + (seed.y - seedCenter.y) * scale,
+        };
+        node.position({
+          x: current.x * 0.48 + target.x * 0.52,
+          y: current.y * 0.48 + target.y * 0.52,
+        });
+      });
+    }
+
+    function binnedPositionCount(cyNodes, axis) {
+      const bins = new Set();
+      cyNodes.forEach((node) => {
+        bins.add(Math.round(node.position(axis) / 36));
+      });
+      return bins.size;
+    }
+
+    function boundingBoxForPositions(positions) {
+      let x1 = Infinity;
+      let y1 = Infinity;
+      let x2 = -Infinity;
+      let y2 = -Infinity;
+      for (const position of positions.values()) {
+        x1 = Math.min(x1, position.x);
+        y1 = Math.min(y1, position.y);
+        x2 = Math.max(x2, position.x);
+        y2 = Math.max(y2, position.y);
+      }
+      return { x1, y1, w: x2 - x1, h: y2 - y1 };
+    }
+
+    function organicPosition(nodeId, nodes, edges) {
+      const layout = organicPosition.layout;
+      const signature = JSON.stringify({
+        nodes: nodes.map((node) => node.id),
+        edges: edges.map((edge) => [edge.source, edge.target]),
+      });
+      if (!layout || layout.signature !== signature) {
+        organicPosition.layout = buildOrganicPositions(nodes, edges, signature);
+      }
+      return organicPosition.layout.positions.get(nodeId) || { x: 0, y: 0 };
+    }
+
+    function buildOrganicPositions(nodes, edges, signature) {
+      const nodeIds = nodes.map((node) => node.id);
+      const adjacency = new Map(nodeIds.map((id) => [id, []]));
+      const indegree = new Map(nodeIds.map((id) => [id, 0]));
+      for (const edge of edges) {
+        if (!adjacency.has(edge.source) || !adjacency.has(edge.target)) {
+          continue;
+        }
+        adjacency.get(edge.source).push(edge.target);
+        adjacency.get(edge.target).push(edge.source);
+        indegree.set(edge.target, (indegree.get(edge.target) || 0) + 1);
+      }
+
+      const positions = new Map();
+      const seen = new Set();
+      let componentIndex = 0;
+      const componentGap = 820;
+      for (const start of nodeIds) {
+        if (seen.has(start)) {
+          continue;
+        }
+
+        const component = [];
+        const queue = [start];
+        seen.add(start);
+        for (let index = 0; index < queue.length; index += 1) {
+          const current = queue[index];
+          component.push(current);
+          for (const next of adjacency.get(current) || []) {
+            if (!seen.has(next)) {
+              seen.add(next);
+              queue.push(next);
+            }
+          }
+        }
+
+        const roots = component.filter((id) => (indegree.get(id) || 0) === 0);
+        const root = roots[0] || component[0];
+        const depth = new Map([[root, 0]]);
+        const order = new Map([[root, 0]]);
+        const walk = [root];
+        for (let index = 0; index < walk.length; index += 1) {
+          const current = walk[index];
+          const neighbors = [...(adjacency.get(current) || [])].sort(compareNodeIds);
+          for (const next of neighbors) {
+            if (!depth.has(next)) {
+              depth.set(next, depth.get(current) + 1);
+              order.set(next, walk.length);
+              walk.push(next);
+            }
+          }
+        }
+
+        component.forEach((id, index) => {
+          if (!depth.has(id)) {
+            depth.set(id, 0);
+            order.set(id, index);
+          }
+        });
+
+        const maxDepth = Math.max(...component.map((id) => depth.get(id)));
+        const centerDepth = maxDepth / 2;
+        const phase = stableNoise(`${signature}:${componentIndex}`) * Math.PI * 2;
+        for (const id of component) {
+          const d = depth.get(id);
+          const rank = order.get(id);
+          const bow = Math.sin((d + 1) * 1.28 + phase) * 138;
+          const branchSpread = (rank - (component.length - 1) / 2) * 36;
+          const loosen = stableNoise(`${id}:loosen`) - 0.5;
+          positions.set(id, {
+            x: componentIndex * componentGap + (d - centerDepth) * 210 + loosen * 70,
+            y: bow + branchSpread + (stableNoise(`${id}:lift`) - 0.5) * 96,
+          });
+        }
+
+        componentIndex += 1;
+      }
+
+      return { signature, positions };
+    }
+
+    function stableNoise(value) {
+      let hash = 2166136261;
+      for (let index = 0; index < value.length; index += 1) {
+        hash ^= value.charCodeAt(index);
+        hash = Math.imul(hash, 16777619);
+      }
+      return (hash >>> 0) / 4294967295;
+    }
+
+    function compareNodeIds(left, right) {
+      return Number(left.replace(/\\D/g, "")) - Number(right.replace(/\\D/g, ""));
+    }
+
+    function pieData(currentParticipants) {
+      const data = {};
+      const size = currentParticipants.length > 0 ? 100 / Math.min(currentParticipants.length, 6) : 0;
+      for (let index = 1; index <= 6; index += 1) {
+        data[`pieColor${index}`] = currentParticipants[index - 1]?.color || "#ffffff";
+        data[`pieSize${index}`] = currentParticipants[index - 1] ? size : 0;
+      }
+      return data;
     }
 
     function renderPath(path) {
@@ -779,14 +979,19 @@ def cytoscape_js() -> FileResponse:
     return FileResponse(CYTOSCAPE_PATH, media_type="text/javascript")
 
 
-@app.get("/assets/dagre.min.js")
-def dagre_js() -> FileResponse:
-    return FileResponse(CYTOSCAPE_DAGRE_DEPENDENCY_PATH, media_type="text/javascript")
+@app.get("/assets/layout-base.min.js")
+def layout_base_js() -> FileResponse:
+    return FileResponse(LAYOUT_BASE_PATH, media_type="text/javascript")
 
 
-@app.get("/assets/cytoscape-dagre.min.js")
-def cytoscape_dagre_js() -> FileResponse:
-    return FileResponse(CYTOSCAPE_DAGRE_PATH, media_type="text/javascript")
+@app.get("/assets/cose-base.min.js")
+def cose_base_js() -> FileResponse:
+    return FileResponse(COSE_BASE_PATH, media_type="text/javascript")
+
+
+@app.get("/assets/cytoscape-fcose.min.js")
+def cytoscape_fcose_js() -> FileResponse:
+    return FileResponse(CYTOSCAPE_FCOSE_PATH, media_type="text/javascript")
 
 
 @app.post("/api/participant-name")
