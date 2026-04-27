@@ -142,7 +142,7 @@ AUDIENCE_HTML = """<!doctype html>
       border: 1px solid #d9dde3;
     }
     .participant-graph {
-      height: clamp(180px, 26vh, 280px);
+      height: clamp(240px, 32vh, 380px);
       border: 1px solid #d5dce6;
       background: #f8fafc;
       position: relative;
@@ -174,7 +174,7 @@ AUDIENCE_HTML = """<!doctype html>
         grid-template-columns: 1fr;
       }
       .participant-graph {
-        height: 210px;
+        height: 280px;
       }
     }
     @media (prefers-color-scheme: dark) {
@@ -330,15 +330,15 @@ AUDIENCE_HTML = """<!doctype html>
                 "border-color": "#d9e2ef",
                 "border-width": 1,
                 "color": "#1f2933",
-                "font-size": 13,
+                "font-size": 12,
                 "font-weight": 650,
                 "label": "data(label)",
                 "text-background-color": "#ffffff",
                 "text-background-opacity": 0.92,
                 "text-background-padding": 3,
-                "text-margin-y": -9,
+                "text-margin-y": -13,
                 "text-wrap": "wrap",
-                "text-max-width": 110,
+                "text-max-width": 95,
                 "width": 12,
                 "height": 12,
               },
@@ -375,9 +375,9 @@ AUDIENCE_HTML = """<!doctype html>
       cy.layout({
         name: window.cytoscapeDagre ? "dagre" : "breadthfirst",
         rankDir: "LR",
-        nodeSep: 28,
-        rankSep: 56,
-        edgeSep: 12,
+        nodeSep: 80,
+        rankSep: 64,
+        edgeSep: 28,
         fit: false,
         padding: 16,
         directed: true,
