@@ -3,8 +3,12 @@ import sqlite3
 from bs4 import BeautifulSoup
 from mitmproxy import http
 
+from wikiracer.monitor import start_monitor
 from wikiracer.options import excluded_titles, highlight_disabled_links
+from wikiracer.progress import record_page
 from wikiracer.urls import title_from_path, wiki_target
+
+start_monitor()
 
 
 def setup_db() -> sqlite3.Connection:
@@ -87,3 +91,12 @@ def response(flow: http.HTTPFlow) -> None:
 
     db.execute("insert or ignore into visited(host, path) values (?, ?)", page)
     db.commit()
+    record_page(client_address(flow), page)
+
+
+def client_address(flow: http.HTTPFlow) -> str:
+    """Return the participant address for a mitmproxy flow."""
+    peername = getattr(flow.client_conn, "peername", None)
+    if isinstance(peername, tuple) and peername:
+        return str(peername[0])
+    return "unknown"

@@ -9,8 +9,10 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "beautifulsoup4",
+    "fastapi",
     "mitmproxy",
     "typer",
+    "uvicorn",
 ]
 
 [project.scripts]
