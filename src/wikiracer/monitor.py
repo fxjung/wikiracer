@@ -7,7 +7,15 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from wikiracer.progress import set_participant_name, snapshot, subscribe, unsubscribe
+from wikiracer.progress import (
+    reset_game,
+    reset_round,
+    set_participant_name,
+    snapshot,
+    subscribe,
+    unsubscribe,
+)
+from wikiracer.storage import clear_visited_pages
 
 
 MONITOR_HOST = "127.0.0.1"
@@ -79,6 +87,22 @@ AUDIENCE_HTML = """<!doctype html>
       font-weight: 750;
       overflow-wrap: anywhere;
     }
+    .summary {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 14px;
+    }
+    .steps {
+      padding: 4px 8px;
+      border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+      color: #26313f;
+      font-size: 13px;
+      font-weight: 750;
+      white-space: nowrap;
+    }
     .current-label {
       margin: 0 0 4px;
       color: #647284;
@@ -125,6 +149,9 @@ AUDIENCE_HTML = """<!doctype html>
       .current-label {
         color: #9da8b6;
       }
+      .steps {
+        color: #eef1f5;
+      }
     }
   </style>
 </head>
@@ -153,7 +180,10 @@ AUDIENCE_HTML = """<!doctype html>
       participantsEl.innerHTML = `
         ${participants.map((participant) => `
           <section class="participant">
-            <h2 class="name">${escapeHtml(participant.displayName)}</h2>
+            <div class="summary">
+              <h2 class="name">${escapeHtml(participant.displayName)}</h2>
+              <span class="steps">${escapeHtml(participant.steps || 0)} steps</span>
+            </div>
             <p class="current-label">Current page</p>
             <p class="current">${escapeHtml(participant.currentTitle || "")}</p>
             <div class="path">${renderPath(participant.path || [])}</div>
@@ -232,6 +262,22 @@ ADMIN_HTML = """<!doctype html>
       font-size: 24px;
       font-weight: 650;
     }
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 14px;
+    }
+    button {
+      padding: 7px 10px;
+      border: 1px solid #c9d0da;
+      background: white;
+      color: inherit;
+      font: inherit;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #eef2f7;
+    }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -277,6 +323,11 @@ ADMIN_HTML = """<!doctype html>
       width: 260px;
       font-weight: 600;
     }
+    .steps {
+      width: 90px;
+      text-align: right;
+      white-space: nowrap;
+    }
     .path {
       color: #3f4752;
       overflow-wrap: anywhere;
@@ -312,6 +363,13 @@ ADMIN_HTML = """<!doctype html>
         background: #15171a;
         border-color: #444b56;
       }
+      button {
+        background: #1d2025;
+        border-color: #444b56;
+      }
+      button:hover {
+        background: #252a31;
+      }
       .path, .status {
         color: #b8c0cc;
       }
@@ -320,11 +378,17 @@ ADMIN_HTML = """<!doctype html>
 </head>
 <body>
   <h1>Wikiracer Admin</h1>
+  <div class="toolbar">
+    <button id="new-round" type="button">New round</button>
+    <button id="new-game" type="button">New game</button>
+  </div>
   <div id="status" class="status">Connecting...</div>
   <main id="participants" class="empty">No participants yet.</main>
   <script>
     const statusEl = document.querySelector("#status");
     const participantsEl = document.querySelector("#participants");
+    const newRoundButton = document.querySelector("#new-round");
+    const newGameButton = document.querySelector("#new-game");
     const pendingNames = new Map();
     const saveTimers = new Map();
     let lastRenderAt = 0;
@@ -350,6 +414,7 @@ ADMIN_HTML = """<!doctype html>
               <th>Participant</th>
               <th>Name</th>
               <th>Current Page</th>
+              <th>Steps</th>
               <th>Path</th>
             </tr>
           </thead>
@@ -366,6 +431,7 @@ ADMIN_HTML = """<!doctype html>
                   >
                 </td>
                 <td class="current">${escapeHtml(participant.currentTitle || "")}</td>
+                <td class="steps">${escapeHtml(participant.steps || 0)}</td>
                 <td class="path">${escapeHtml((participant.path || []).join(" > "))}</td>
               </tr>
             `).join("")}
@@ -414,6 +480,21 @@ ADMIN_HTML = """<!doctype html>
       pendingNames.delete(address);
       saveTimers.delete(address);
     }
+
+    async function postAction(path) {
+      const response = await fetch(path, { method: "POST" });
+      render(await response.json());
+    }
+
+    newRoundButton.addEventListener("click", () => {
+      postAction("/api/new-round");
+    });
+
+    newGameButton.addEventListener("click", () => {
+      if (confirm("Reset globally visited pages and clear current paths?")) {
+        postAction("/api/new-game");
+      }
+    });
 
     function cssEscape(value) {
       if (window.CSS?.escape) {
@@ -489,6 +570,17 @@ def progress() -> dict[str, object]:
 @app.post("/api/participant-name")
 def participant_name(update: ParticipantNameUpdate) -> dict[str, object]:
     return set_participant_name(update.address, update.name)
+
+
+@app.post("/api/new-round")
+def new_round() -> dict[str, object]:
+    return reset_round()
+
+
+@app.post("/api/new-game")
+def new_game() -> dict[str, object]:
+    clear_visited_pages()
+    return reset_game()
 
 
 @app.websocket("/ws")

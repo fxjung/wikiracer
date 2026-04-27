@@ -23,6 +23,7 @@ class ParticipantProgress:
             "displayName": self.name or self.address,
             "currentTitle": self.current_title,
             "path": self.path,
+            "steps": len(self.path),
         }
 
 
@@ -71,6 +72,22 @@ def set_participant_name(address: str, name: str) -> dict[str, Any]:
 
     publish(state)
     return state
+
+
+def reset_round() -> dict[str, Any]:
+    """Clear participant paths while keeping known participants and names."""
+    with _lock:
+        for progress in _participants.values():
+            progress.path.clear()
+        state = snapshot()
+
+    publish(state)
+    return state
+
+
+def reset_game() -> dict[str, Any]:
+    """Clear participant paths while keeping known participants and names."""
+    return reset_round()
 
 
 def subscribe() -> asyncio.Queue[dict[str, Any]]:
