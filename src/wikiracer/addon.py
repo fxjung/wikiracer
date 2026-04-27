@@ -3,8 +3,8 @@ import sqlite3
 from bs4 import BeautifulSoup
 from mitmproxy import http
 
-from .options import excluded_titles, highlight_disabled_links
-from .urls import title_from_path, wiki_target
+from wikiracer.options import excluded_titles, highlight_disabled_links
+from wikiracer.urls import title_from_path, wiki_target
 
 
 def setup_db() -> sqlite3.Connection:
