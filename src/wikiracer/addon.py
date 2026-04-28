@@ -1,17 +1,8 @@
-from urllib.parse import urlsplit
-
 from bs4 import BeautifulSoup
 from mitmproxy import http
 
 from wikiracer.monitor import start_monitor
-from wikiracer.options import (
-    excluded_titles,
-    highlight_disabled_links,
-    monitor_host,
-    monitor_port,
-    proxy_host,
-    proxy_port,
-)
+from wikiracer.options import excluded_titles, highlight_disabled_links
 from wikiracer.progress import record_page
 from wikiracer.storage import record_visited_page, setup_db, visited_pages
 from wikiracer.urls import title_from_path, wiki_target
@@ -19,19 +10,9 @@ from wikiracer.urls import title_from_path, wiki_target
 start_monitor()
 setup_db()
 
-MONITOR_PATH_PREFIXES = (
-    "/audience",
-    "/ws",
-    "/api/",
-    "/assets/",
-)
-
 
 def request(flow: http.HTTPFlow) -> None:
     """Force Wikipedia page requests through the proxy instead of cache."""
-    if route_monitor_traffic(flow):
-        return
-
     if wiki_target(flow.request.url) is None:
         return
 
@@ -95,51 +76,3 @@ def client_address(flow: http.HTTPFlow) -> str:
     if isinstance(peername, tuple) and peername:
         return str(peername[0])
     return "unknown"
-
-
-def route_monitor_traffic(flow: http.HTTPFlow) -> bool:
-    """Route monitor UI/API requests through the local monitor backend."""
-    request_path = monitor_request_path(flow.request)
-    if not request_path.startswith(MONITOR_PATH_PREFIXES):
-        return False
-
-    sockname = getattr(flow.client_conn, "sockname", None)
-    if not isinstance(sockname, tuple) or len(sockname) < 2:
-        return False
-
-    listen_host, listen_port = str(sockname[0]), int(sockname[1])
-    request_host = flow.request.pretty_host.lower()
-    local_hosts = {
-        listen_host.lower(),
-        proxy_host().lower(),
-        "localhost",
-        "127.0.0.1",
-        "::1",
-    }
-    if request_host not in local_hosts:
-        return False
-
-    allowed_ports = {listen_port, proxy_port()}
-    if flow.request.port not in allowed_ports:
-        return False
-
-    upstream_host = monitor_host()
-    upstream_port = monitor_port()
-    flow.request.scheme = "http"
-    flow.request.host = upstream_host
-    flow.request.port = upstream_port
-    flow.request.host_header = f"{upstream_host}:{upstream_port}"
-    return True
-
-
-def monitor_request_path(request: http.Request) -> str:
-    """Return a normalized path for monitor route checks."""
-    if request.url.startswith(("http://", "https://", "ws://", "wss://")):
-        parsed = urlsplit(request.url).path
-        if parsed:
-            return parsed
-
-    path = request.path
-    if path.startswith(("http://", "https://", "ws://", "wss://")):
-        return urlsplit(path).path or "/"
-    return path
