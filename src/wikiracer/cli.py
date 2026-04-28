@@ -48,6 +48,22 @@ def cli(
             help="Render disabled links as red text instead of plain text.",
         ),
     ] = False,
+    monitor_host: Annotated[
+        str | None,
+        typer.Option(
+            "--monitor-host",
+            help="Bind host for the monitor UI (e.g. 0.0.0.0 for LAN access).",
+        ),
+    ] = None,
+    monitor_port: Annotated[
+        int | None,
+        typer.Option(
+            "--monitor-port",
+            min=1,
+            max=65535,
+            help="Bind port for the monitor UI.",
+        ),
+    ] = None,
 ) -> None:
     """Run the Wikipedia race mitmproxy addon.
 
@@ -57,6 +73,10 @@ def cli(
         environ["WIKIRACE_EXCEPTIONS"] = except_option
     if highlight_disabled_links:
         environ["WIKIRACE_HIGHLIGHT_DISABLED_LINKS"] = "1"
+    if monitor_host is not None:
+        environ["WIKIRACE_MONITOR_HOST"] = monitor_host
+    if monitor_port is not None:
+        environ["WIKIRACE_MONITOR_PORT"] = str(monitor_port)
 
     run_mitmproxy(list(ctx.args))
 

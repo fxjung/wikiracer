@@ -11,6 +11,11 @@ def title_from_path(path: str) -> str:
     return normalize_title(path.split("/wiki/", 1)[1])
 
 
+def display_title_from_path(path: str) -> str:
+    """Extract a human-readable title from a ``/wiki/`` path."""
+    return unquote(path.split("/wiki/", 1)[1]).replace("_", " ")
+
+
 def is_wiki_page(path: str) -> bool:
     """Return whether a path points to a normal Wikipedia article page."""
     title = unquote(path).split("/wiki/", 1)[1] if path.startswith("/wiki/") else ""
