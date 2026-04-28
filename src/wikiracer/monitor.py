@@ -241,7 +241,7 @@ AUDIENCE_HTML = """<!doctype html>
             </div>
             <p class="current-label">Current page</p>
             <p class="current">${escapeHtml(participant.currentTitle || "")}</p>
-            # <div class="path">${renderPath(participant.path || [])}</div>
+            <!-- <div class="path">${renderPath(participant.path || [])}</div>  -->
           </section>
         `).join("")}
       `;
