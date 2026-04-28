@@ -1,3 +1,5 @@
+from urllib.parse import urlsplit
+
 from bs4 import BeautifulSoup
 from mitmproxy import http
 
@@ -97,7 +99,8 @@ def client_address(flow: http.HTTPFlow) -> str:
 
 def route_monitor_traffic(flow: http.HTTPFlow) -> bool:
     """Route monitor UI/API requests through the local monitor backend."""
-    if not flow.request.path.startswith(MONITOR_PATH_PREFIXES):
+    request_path = monitor_request_path(flow.request)
+    if not request_path.startswith(MONITOR_PATH_PREFIXES):
         return False
 
     sockname = getattr(flow.client_conn, "sockname", None)
@@ -127,3 +130,16 @@ def route_monitor_traffic(flow: http.HTTPFlow) -> bool:
     flow.request.port = upstream_port
     flow.request.host_header = f"{upstream_host}:{upstream_port}"
     return True
+
+
+def monitor_request_path(request: http.Request) -> str:
+    """Return a normalized path for monitor route checks."""
+    if request.url.startswith(("http://", "https://", "ws://", "wss://")):
+        parsed = urlsplit(request.url).path
+        if parsed:
+            return parsed
+
+    path = request.path
+    if path.startswith(("http://", "https://", "ws://", "wss://")):
+        return urlsplit(path).path or "/"
+    return path
