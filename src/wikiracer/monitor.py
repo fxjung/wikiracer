@@ -8,6 +8,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
+from wikiracer.options import monitor_host, monitor_port
 from wikiracer.progress import (
     reset_game,
     reset_round,
@@ -19,8 +20,6 @@ from wikiracer.progress import (
 from wikiracer.storage import clear_visited_pages
 
 
-MONITOR_HOST = "127.0.0.1"
-MONITOR_PORT = 9999
 CYTOSCAPE_PATH = Path(__file__).with_name("cytoscape.min.js")
 LAYOUT_BASE_PATH = Path(__file__).with_name("layout-base.min.js")
 COSE_BASE_PATH = Path(__file__).with_name("cose-base.min.js")
@@ -1033,8 +1032,8 @@ def start_monitor() -> None:
 
     config = uvicorn.Config(
         app,
-        host=MONITOR_HOST,
-        port=MONITOR_PORT,
+        host=monitor_host(),
+        port=monitor_port(),
         log_level="warning",
     )
     server = uvicorn.Server(config)

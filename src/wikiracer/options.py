@@ -3,6 +3,10 @@ from os import environ
 from .urls import title_from_path, wiki_target, normalize_title
 
 
+DEFAULT_MONITOR_HOST = "127.0.0.1"
+DEFAULT_MONITOR_PORT = 9999
+
+
 def exception_title(raw_title: str) -> str | None:
     """Normalize one command-line exception entry."""
     raw_title = raw_title.strip()
@@ -35,3 +39,24 @@ def highlight_disabled_links() -> bool:
         "true",
         "yes",
     }
+
+
+def monitor_host() -> str:
+    """Return the monitor bind host."""
+    return environ.get("WIKIRACE_MONITOR_HOST", DEFAULT_MONITOR_HOST)
+
+
+def monitor_port() -> int:
+    """Return the monitor bind port."""
+    raw_port = environ.get("WIKIRACE_MONITOR_PORT")
+    if raw_port is None:
+        return DEFAULT_MONITOR_PORT
+
+    try:
+        port = int(raw_port)
+    except ValueError:
+        return DEFAULT_MONITOR_PORT
+
+    if 1 <= port <= 65535:
+        return port
+    return DEFAULT_MONITOR_PORT
