@@ -22,12 +22,18 @@ def run_mitmproxy(args: list[str], host: str, port: int) -> None:
     from mitmproxy.tools.main import mitmproxy
 
     addon_path = Path(__file__).with_name("addon.py")
-    sys.argv = [
-        "mitmproxy",
+    mitmproxy_args = [
         "--listen-host",
         host,
         "--listen-port",
         str(port),
+    ]
+    if host not in {"127.0.0.1", "::1", "localhost"}:
+        mitmproxy_args.extend(["--set", "block_global=false"])
+
+    sys.argv = [
+        "mitmproxy",
+        *mitmproxy_args,
         "-s",
         str(addon_path),
         *args,
