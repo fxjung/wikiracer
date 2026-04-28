@@ -5,6 +5,8 @@ from .urls import title_from_path, wiki_target, normalize_title
 
 DEFAULT_MONITOR_HOST = "127.0.0.1"
 DEFAULT_MONITOR_PORT = 9999
+DEFAULT_PROXY_HOST = "127.0.0.1"
+DEFAULT_PROXY_PORT = 8080
 
 
 def exception_title(raw_title: str) -> str | None:
@@ -60,3 +62,24 @@ def monitor_port() -> int:
     if 1 <= port <= 65535:
         return port
     return DEFAULT_MONITOR_PORT
+
+
+def proxy_host() -> str:
+    """Return the proxy bind host."""
+    return environ.get("WIKIRACE_PROXY_HOST", DEFAULT_PROXY_HOST)
+
+
+def proxy_port() -> int:
+    """Return the proxy bind port."""
+    raw_port = environ.get("WIKIRACE_PROXY_PORT")
+    if raw_port is None:
+        return DEFAULT_PROXY_PORT
+
+    try:
+        port = int(raw_port)
+    except ValueError:
+        return DEFAULT_PROXY_PORT
+
+    if 1 <= port <= 65535:
+        return port
+    return DEFAULT_PROXY_PORT
